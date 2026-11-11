@@ -1,12 +1,13 @@
 import numpy as np
 
-# MY OWN CODE: from previous tasks - image filtering (whole file with notes of AI assistance as given in comments)
+# WŁASNE: from previous tasks - image filtering
+# GENAI: Claude – adaptation of my task-3 Gaussian code to 2D grayscale arrays (no uint8 rounding between passes)
 
 def get_separable_gaussian_kernel(sigma=1.0):
     radius = int(np.ceil(3 * sigma))
 
     x = np.arange(-radius, radius + 1)
-    # GenAI: Gemini used to help with using correct Gaussian kernel formula
+    # GENAI: Gemini used to help with using correct Gaussian kernel formula
     kernel = np.exp(-(x**2) / (2 * (sigma**2)))
 
     kernel /= np.sum(kernel)
@@ -25,7 +26,7 @@ def optimized_convolution(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
 
     output = np.zeros(image.shape, dtype=np.float64)
 
-    # GenAI: Gemini used to help with optimizing the convolution operation by iterating over the kernel and applying it to the entire image at once
+    # GENAI: Gemini used to help with optimizing the convolution operation by iterating over the kernel and applying it to the entire image at once
     for n in range(kernel_height):
         for m in range(kernel_width):
             weight = kernel[n, m]

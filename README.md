@@ -40,14 +40,16 @@ py gui.py
 ## Notes
 
 - AI usage:
-    - GUI implementation,
-    - optimized versions for thresholding functions. Use of numpy methods like cumsum() and vectorization made the methods work much faster (~100-180 times). Deatils provided in the related file.
+    - GUI implementation (`gui.py` file),
+    - optimized versions for thresholding functions. Use of numpy methods like cumsum() and vectorization made the methods work much faster (~100-180 times). Details provided in the related file,
+    - `filters.py` previous task's own code adaptation for greyscale images.
+
 
 - Observations:
     - **Manual vs Otsu**: Otsu's `t*` lands in the valley between the two histogram peaks. A manual threshold set below `t*` lets background pixels into the mask (objects "grow", more noise), and one set above `t*` erodes the objects. With the slider at exactly `t*`, both masks are identical, since both use the same `apply_threshold`.
     <img width="1562" height="1068" alt="image" src="https://github.com/user-attachments/assets/f74f66f0-9805-40c6-99d1-cb6737249c7d" />
 
-    - **Gaussian pre-filtering**: on a very noisy test image (noise σ = 40), the unfiltered histogram is a single broad hump. Both masks are full of salt-and-pepper noise, whatever the threshold (`t*` = 108). After a Gaussian filter (σ = 2) the histogram shows two separate peaks, `t*` moves to 118, and both masks have clean, solid shapes.
+    - **Gaussian pre-filtering**: noise widens the histogram peaks until they overlap, so no single threshold separates the classes cleanly, and the mask has isolated "salt-and-pepper" pixels. Smoothing before thresholding narrows the peaks and deepens the valley between them. The masks get cleaner and more solid, and Otsu's `t*` becomes more reliable because the histogram is closer to bimodal.
     <img width="1554" height="1062" alt="image" src="https://github.com/user-attachments/assets/46cf3a0b-1651-4630-8964-234585aca375" />
     <img width="1555" height="1061" alt="image" src="https://github.com/user-attachments/assets/c85c5098-ebd7-4ea6-b52d-7d55291d6334" />
 

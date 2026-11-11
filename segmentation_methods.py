@@ -1,6 +1,6 @@
 import numpy as np
 
-# MY OWN CODE: calculating image histogram
+# WŁASNE: calculating image histogram
 # def calculate_image_histogram(image: np.ndarray):
 #     height, width = image.shape
 #     N = height * width
@@ -19,7 +19,7 @@ import numpy as np
 #
 #     return probability, histogram_bins
 
-# GenAI: Claude - optimized version of calculate_image_histogram (loops replaced with NumPy)
+# GENAI: Claude - optimized version of calculate_image_histogram (loops replaced with NumPy)
 # ~ 130x faster (400x600 image)
 def optimized_calculate_image_histogram(image: np.ndarray):
     N = image.size
@@ -32,13 +32,13 @@ def optimized_calculate_image_histogram(image: np.ndarray):
 
     return probability, histogram_bins
 
-# MY OWN CODE: applying the threshold to the image (creating the binary mask)
+# WŁASNE: applying the threshold to the image (creating the binary mask)
 def apply_threshold(image: np.ndarray, t: int):
     # M(x,y) = 1 if I(x,y) >= t else 0
     mask = image >= t
     return mask.astype(np.uint8) * 255
 
-# MY OWN CODE: otsu thresholding algorithm based on the instructions provided in the task
+# WŁASNE: otsu thresholding algorithm based on the instructions provided in the task
 # def otsu_threshold(image: np.ndarray):
 #     probability, _ = calculate_image_histogram(image)
 #
@@ -70,7 +70,7 @@ def apply_threshold(image: np.ndarray, t: int):
 #
 #     return best_threshold, sigma_b_squared
 
-# GenAI: Claude - optimized version of otsu_threshold
+# GENAI: Claude - optimized version of otsu_threshold
 # The inner loop is replaced with cumulative sums which give those sums for every t at once
 # ~ 100x faster (400x600 image)
 def optimized_otsu_threshold(image: np.ndarray):
@@ -97,7 +97,7 @@ def optimized_otsu_threshold(image: np.ndarray):
 
     return best_threshold, sigma_b_squared
 
-# MY OWN CODE: adaptive thresholding based on the instructions provided in the task
+# WŁASNE: adaptive thresholding based on the instructions provided in the task
 # def adaptive_threshold(image: np.ndarray, W: int, C: float):
 #     window_radius = W // 2
 #     padded_image = np.pad(image, window_radius, mode='edge')
@@ -112,7 +112,7 @@ def optimized_otsu_threshold(image: np.ndarray):
 #
 #     return apply_threshold(image, T), T
 
-# GenAI: Claude - optimized version of adaptive_threshold using an integral image
+# GENAI: Claude - optimized version of adaptive_threshold using an integral image
 # S[x, y] = sum of all padded pixels above and to the left of (x, y), so the sum of any
 # W x W window needs only 4 lookups (independent of W) and is done for all pixels at once
 # ~ 180x faster (400x600 image)

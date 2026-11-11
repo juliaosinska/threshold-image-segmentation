@@ -1,4 +1,7 @@
-#GenAI: Gemini and Claude for UI full UI implementation
+# GENAI: Gemini and Claude for UI full UI implementation
+# Gemini - base code for GUI layout, widgets, and event handling (from previous tasks)
+# Claude - adaptation for this task (connecting the thresholding methods, matplotlib plots:
+#          histogram, sigma_B^2(t), T(x,y) map, Manual vs Otsu comparison view, Gaussian pre-filter)
 
 import tkinter as tk
 from tkinter import filedialog, ttk
