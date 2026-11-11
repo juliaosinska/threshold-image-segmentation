@@ -8,9 +8,9 @@ from PIL import Image, ImageTk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from segmentation_methods import calculate_image_histogram, otsu_threshold, apply_threshold
+from segmentation_methods import adaptive_threshold, calculate_image_histogram, otsu_threshold, apply_threshold
 
-PREVIEW_SIZE = (500, 300)
+PREVIEW_SIZE = (360, 260)  # max thumbnail size; fits a pane also in the 3-column layout
 
 
 class ImageSegmentationGUI:
@@ -43,7 +43,7 @@ class ImageSegmentationGUI:
         self.method_dropdown = ttk.Combobox(
             control_frame,
             textvariable=self.method_var,
-            values=["Manual", "Otsu's Algorithm", "Adaptive", "Multi-level"],
+            values=["Manual", "Otsu's Algorithm", "Adaptive"],
             state="readonly",
             width=20
         )
@@ -108,13 +108,14 @@ class ImageSegmentationGUI:
         self.preview_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Configure grid weight for 2x2 layout
-        self.preview_container.grid_columnconfigure(0, weight=1)
-        self.preview_container.grid_columnconfigure(1, weight=1)
-        self.preview_container.grid_rowconfigure(0, weight=1)
-        self.preview_container.grid_rowconfigure(1, weight=1)
+        # uniform=... -> columns/rows get equal size regardless of their content
+        self.preview_container.grid_columnconfigure(0, weight=1, uniform="col")
+        self.preview_container.grid_columnconfigure(1, weight=1, uniform="col")
+        self.preview_container.grid_rowconfigure(0, weight=1, uniform="row")
+        self.preview_container.grid_rowconfigure(1, weight=1, uniform="row")
 
         # Define titles for the 4 preview panes
-        previews_list = ["Original Image", "Pre-filtered Image", "Binary Mask", "Histogram / Plot"]
+        previews_list = ["Original Image", "Pre-filtered Image", "Binary Mask", "Histogram"]
 
         for idx, title in enumerate(previews_list):
             row = idx // 2
@@ -123,12 +124,19 @@ class ImageSegmentationGUI:
             frame = tk.LabelFrame(self.preview_container, text=title)
             frame.grid(row=row, column=col, sticky="nsew", padx=5, pady=5)
 
-            if title == "Histogram / Plot":
+            if title == "Histogram":
                 self.create_histogram_plot(frame)
             else:
                 canvas = tk.Label(frame, text=f"No {title.lower()} yet", bg="#f0f0f0")
                 canvas.pack(fill=tk.BOTH, expand=True)
                 self.preview_canvases[title] = canvas
+
+        # Extra pane on the right (column 2, full height): method-specific plot.
+        # Hidden by default, shown only for Otsu (sigma_B^2) and Adaptive (T map).
+        self.method_plot_frame = tk.LabelFrame(self.preview_container, text="Method Plot")
+        self.method_plot_frame.grid(row=0, column=2, rowspan=2, sticky="nsew", padx=5, pady=5)
+        self.create_method_plot(self.method_plot_frame)
+        self.set_method_plot_visible(False)
 
         # --- 4. Status Bar ---
         self.status_var = tk.StringVar(value="Ready. Please load an image.")
@@ -142,7 +150,8 @@ class ImageSegmentationGUI:
     # Histogram plot (matplotlib embedded in tkinter)
     # ------------------------------------------------------------------
     def create_histogram_plot(self, parent):
-        self.figure = Figure(figsize=(5, 3), dpi=100)
+        # Small requested size (the pane stretches it); "constrained" recomputes margins on every resize
+        self.figure = Figure(figsize=(3, 2), dpi=100, layout="constrained")
         self.ax = self.figure.add_subplot(111)
         self.ax.set_xlim(0, 255)
         self.ax.set_xlabel("Intensity i")
@@ -154,7 +163,6 @@ class ImageSegmentationGUI:
         # Legend first: it copies line properties (incl. visibility) at creation time
         self.ax.legend(loc="upper right")
         self.otsu_line.set_visible(False)
-        self.figure.tight_layout()
 
         self.plot_canvas = FigureCanvasTkAgg(self.figure, master=parent)
         self.plot_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -171,6 +179,47 @@ class ImageSegmentationGUI:
     def move_line(self, line, t):
         line.set_xdata([t, t])
         self.plot_canvas.draw_idle()
+
+    # ------------------------------------------------------------------
+    # Method plot (separate pane on the right: Otsu / Adaptive)
+    # ------------------------------------------------------------------
+    def create_method_plot(self, parent):
+        self.method_figure = Figure(figsize=(3, 3), dpi=100, layout="constrained")
+        self.ax_method = self.method_figure.add_subplot(111)
+        self.method_canvas = FigureCanvasTkAgg(self.method_figure, master=parent)
+        self.method_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    def set_method_plot_visible(self, visible, title="Method Plot"):
+        self.method_plot_visible = visible
+        if visible:
+            self.method_plot_frame.config(text=title)
+            self.method_plot_frame.grid()
+            self.preview_container.grid_columnconfigure(2, weight=1, uniform="col")
+            self.method_canvas.draw_idle()
+        else:
+            self.method_plot_frame.grid_remove()  # hides, but remembers grid position
+            self.preview_container.grid_columnconfigure(2, weight=0, uniform="")
+
+    def plot_sigma_b_squared(self):
+        ax = self.ax_method
+        ax.clear()
+        ax.axis("on")
+        ax.plot(np.arange(256), self.sigma_b_squared, color="green")
+        ax.axvline(self.otsu_t, color="green", linestyle="--", label=f"t* = {self.otsu_t}")
+        ax.set_xlim(0, 255)
+        ax.set_xlabel("t")
+        ax.set_ylabel(r"$\sigma_B^2(t)$")
+        ax.legend(loc="upper right")
+        self.set_method_plot_visible(True, "Otsu: between-class variance")
+
+    def plot_threshold_map(self, T, W, C):
+        ax = self.ax_method
+        ax.clear()
+        # Same gray scale as the image (0..255), so T can be compared with I directly
+        ax.imshow(T, cmap="gray", vmin=0, vmax=255)
+        ax.set_title(f"W = {W}, C = {C}", fontsize=9)
+        ax.axis("off")
+        self.set_method_plot_visible(True, "Adaptive: threshold map T(x,y)")
 
     def on_log_toggled(self):
         if self.histogram_bins is not None:
@@ -193,9 +242,7 @@ class ImageSegmentationGUI:
 
     def on_method_changed(self, event=None):
         self.update_params_visibility()
-        self.status_var.set(f"Selected method: {self.method_var.get()}")
-        if self.image_array is not None:
-            self.process_image()
+        self.status_var.set(f"Selected method: {self.method_var.get()} - click 'Process Image' to compute the mask")
 
     def on_param_changed(self, value=None):
         # Called by the slider on every move -> live preview
@@ -216,6 +263,8 @@ class ImageSegmentationGUI:
         if method == "Manual":
             t = self.threshold_var.get()
             self.show_mask(apply_threshold(self.image_array, t))
+            if self.method_plot_visible:
+                self.set_method_plot_visible(False)
             self.status_var.set(f"Manual threshold: t = {t}")
 
         elif method == "Otsu's Algorithm":
@@ -226,10 +275,30 @@ class ImageSegmentationGUI:
             self.otsu_line.set_visible(True)
             self.move_line(self.otsu_line, self.otsu_t)
             self.show_mask(apply_threshold(self.image_array, self.otsu_t))
+            self.plot_sigma_b_squared()
             self.status_var.set(f"Otsu threshold: t* = {self.otsu_t}")
 
+        elif method == "Adaptive":
+            W = self.window_var.get()
+            C = self.c_var.get()
+            if W % 2 == 0 or W < 3:
+                self.status_var.set("Window W must be an odd integer >= 3.")
+                return
+            self.status_var.set(f"Applying adaptive thresholding (W={W}, C={C})...")
+            self.root.update_idletasks()
+            mask, T = adaptive_threshold(self.image_array, W, C)
+            self.show_mask(mask)
+            self.plot_threshold_map(T, W, C)
+            self.status_var.set(f"Adaptive thresholding applied (W={W}, C={C}).")
         else:
             self.status_var.set(f"{method}: not implemented yet")
+
+    def clear_mask(self):
+        # Forget the old mask so it can't be saved for a different image
+        self.current_mask = None
+        canvas = self.preview_canvases["Binary Mask"]
+        canvas.config(image="", text="No binary mask yet")
+        canvas.image = None
 
     def show_mask(self, mask):
         self.current_mask = mask
@@ -251,6 +320,8 @@ class ImageSegmentationGUI:
         self.otsu_t = None
         self.sigma_b_squared = None
         self.otsu_line.set_visible(False)
+        self.clear_mask()
+        self.set_method_plot_visible(False)
 
         self.display_image(self.original_image, self.preview_canvases["Original Image"])
 
@@ -259,8 +330,7 @@ class ImageSegmentationGUI:
         _, self.histogram_bins = calculate_image_histogram(self.image_array)
         self.draw_histogram()
 
-        self.process_image()
-        self.status_var.set(f"Loaded: {file_path}")
+        self.status_var.set(f"Loaded: {file_path} - click 'Process Image' to compute the mask")
 
     def save_mask(self):
         if self.current_mask is None:
