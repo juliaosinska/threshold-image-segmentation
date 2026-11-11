@@ -8,7 +8,12 @@ from PIL import Image, ImageTk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from segmentation_methods import adaptive_threshold, calculate_image_histogram, otsu_threshold, apply_threshold
+from segmentation_methods import (
+    optimized_adaptive_threshold,
+    optimized_calculate_image_histogram,
+    optimized_otsu_threshold,
+    apply_threshold,
+)
 from filters import gaussian_filter
 
 COMPARE_METHOD = "Compare: Manual vs Otsu"
@@ -324,14 +329,14 @@ class ImageSegmentationGUI:
         # Histogram of the image that is actually thresholded
         self.status_var.set("Computing histogram...")
         self.root.update_idletasks()
-        _, self.histogram_bins = calculate_image_histogram(self.working_array)
+        _, self.histogram_bins = optimized_calculate_image_histogram(self.working_array)
         self.draw_histogram()
 
     def get_otsu(self, key, image):
         if key not in self.otsu_cache:
             self.status_var.set("Computing Otsu threshold...")
             self.root.update_idletasks()
-            self.otsu_cache[key] = otsu_threshold(image)
+            self.otsu_cache[key] = optimized_otsu_threshold(image)
         return self.otsu_cache[key]
 
     def show_otsu_on_histogram(self):
@@ -380,7 +385,7 @@ class ImageSegmentationGUI:
                 return
             self.status_var.set(f"Applying adaptive thresholding (W={W}, C={C})...")
             self.root.update_idletasks()
-            mask, T = adaptive_threshold(self.working_array, W, C)
+            mask, T = optimized_adaptive_threshold(self.working_array, W, C)
             self.show_mask(mask)
             self.plot_threshold_map(T, W, C)
             self.status_var.set(f"Adaptive thresholding applied (W={W}, C={C}).")
