@@ -9,6 +9,9 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from segmentation_methods import adaptive_threshold, calculate_image_histogram, otsu_threshold, apply_threshold
+from filters import gaussian_filter
+
+COMPARE_METHOD = "Compare: Manual vs Otsu"
 
 PREVIEW_SIZE = (360, 260)  # max thumbnail size; fits a pane also in the 3-column layout
 
@@ -22,9 +25,12 @@ class ImageSegmentationGUI:
         # --- Application state ---
         self.original_image = None   # PIL image in grayscale ("L")
         self.image_array = None      # the same image as np.ndarray (uint8, H x W)
-        self.histogram_bins = None   # h(i), computed once per loaded image
-        self.otsu_t = None           # cached Otsu threshold t*
-        self.sigma_b_squared = None  # cached sigma_B^2(t) for t = 0..255
+        self.working_array = None    # image actually thresholded: image_array or its filtered version
+        self.filter_key = "None"     # name of the current pre-filter, e.g. "Gaussian σ=1.0"
+        self.histogram_bins = None   # h(i) of working_array
+        self.otsu_cache = {}         # filter_key -> (t*, sigma_B^2), so Otsu runs once per image version
+        self.otsu_t = None           # Otsu t* of working_array
+        self.sigma_b_squared = None  # sigma_B^2(t) of working_array, t = 0..255
         self.current_mask = None     # last computed mask (uint8, values 0/255)
         self.hist_bars = None
         self.preview_canvases = {}
@@ -43,9 +49,9 @@ class ImageSegmentationGUI:
         self.method_dropdown = ttk.Combobox(
             control_frame,
             textvariable=self.method_var,
-            values=["Manual", "Otsu's Algorithm", "Adaptive"],
+            values=["Manual", "Otsu's Algorithm", "Adaptive", COMPARE_METHOD],
             state="readonly",
-            width=20
+            width=24
         )
         self.method_dropdown.pack(side=tk.LEFT, padx=5)
         self.method_dropdown.bind("<<ComboboxSelected>>", self.on_method_changed)
@@ -61,6 +67,16 @@ class ImageSegmentationGUI:
             width=12
         )
         self.filter_dropdown.pack(side=tk.LEFT, padx=5)
+        self.filter_dropdown.bind("<<ComboboxSelected>>", self.on_filter_changed)
+
+        # Gaussian sigma
+        tk.Label(control_frame, text="σ:").pack(side=tk.LEFT, padx=(10, 2))
+        self.sigma_var = tk.DoubleVar(value=1.0)
+        self.sigma_spin = tk.Spinbox(
+            control_frame, from_=0.5, to=5.0, increment=0.5,
+            textvariable=self.sigma_var, width=5, command=self.on_filter_changed
+        )
+        self.sigma_spin.pack(side=tk.LEFT, padx=5)
 
         # Process / Apply Button
         self.process_btn = tk.Button(control_frame, text="Process Image", command=self.process_image, bg="#e0e0e0")
@@ -185,7 +201,6 @@ class ImageSegmentationGUI:
     # ------------------------------------------------------------------
     def create_method_plot(self, parent):
         self.method_figure = Figure(figsize=(3, 3), dpi=100, layout="constrained")
-        self.ax_method = self.method_figure.add_subplot(111)
         self.method_canvas = FigureCanvasTkAgg(self.method_figure, master=parent)
         self.method_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
@@ -200,26 +215,46 @@ class ImageSegmentationGUI:
             self.method_plot_frame.grid_remove()  # hides, but remembers grid position
             self.preview_container.grid_columnconfigure(2, weight=0, uniform="")
 
+    def new_method_axes(self):
+        # Each method plot starts from an empty figure (comparison uses a grid of axes)
+        self.method_figure.clear()
+        return self.method_figure.add_subplot(111)
+
     def plot_sigma_b_squared(self):
-        ax = self.ax_method
-        ax.clear()
-        ax.axis("on")
+        ax = self.new_method_axes()
         ax.plot(np.arange(256), self.sigma_b_squared, color="green")
         ax.axvline(self.otsu_t, color="green", linestyle="--", label=f"t* = {self.otsu_t}")
         ax.set_xlim(0, 255)
         ax.set_xlabel("t")
         ax.set_ylabel(r"$\sigma_B^2(t)$")
         ax.legend(loc="upper right")
+        ax.set_title(self.filter_label(), fontsize=9)
         self.set_method_plot_visible(True, "Otsu: between-class variance")
 
     def plot_threshold_map(self, T, W, C):
-        ax = self.ax_method
-        ax.clear()
+        ax = self.new_method_axes()
         # Same gray scale as the image (0..255), so T can be compared with I directly
         ax.imshow(T, cmap="gray", vmin=0, vmax=255)
-        ax.set_title(f"W = {W}, C = {C}", fontsize=9)
+        ax.set_title(f"W = {W}, C = {C}, {self.filter_label()}", fontsize=9)
         ax.axis("off")
         self.set_method_plot_visible(True, "Adaptive: threshold map T(x,y)")
+
+    def plot_comparison(self, t):
+        # Grid of masks: columns = manual t / Otsu t*, rows = without filter / with filter (if any)
+        rows = [("No filter", "None", self.image_array)]
+        if self.filter_key != "None":
+            rows.append((self.filter_key, self.filter_key, self.working_array))
+
+        self.method_figure.clear()
+        axes = self.method_figure.subplots(len(rows), 2, squeeze=False)
+        for r, (row_name, key, image) in enumerate(rows):
+            t_star, _ = self.get_otsu(key, image)
+            for c, (name, threshold) in enumerate([("Manual t", t), ("Otsu t*", t_star)]):
+                ax = axes[r][c]
+                ax.imshow(apply_threshold(image, threshold), cmap="gray", vmin=0, vmax=255)
+                ax.set_title(f"{row_name}\n{name} = {threshold}", fontsize=8)
+                ax.axis("off")
+        self.set_method_plot_visible(True, "Comparison: manual vs Otsu")
 
     def on_log_toggled(self):
         if self.histogram_bins is not None:
@@ -235,7 +270,7 @@ class ImageSegmentationGUI:
         self.adaptive_frame.pack_forget()
 
         # Show relevant parameters based on selected method
-        if method == "Manual":
+        if method in ("Manual", COMPARE_METHOD):
             self.manual_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         elif method == "Adaptive":
             self.adaptive_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -247,8 +282,62 @@ class ImageSegmentationGUI:
     def on_param_changed(self, value=None):
         # Called by the slider on every move -> live preview
         self.move_line(self.manual_line, self.threshold_var.get())
-        if self.image_array is not None and self.method_var.get() == "Manual":
+        if self.image_array is not None and self.method_var.get() in ("Manual", COMPARE_METHOD):
             self.process_image()
+
+    def on_filter_changed(self, event=None):
+        if self.image_array is not None:
+            self.update_working_image()
+            self.status_var.set(f"Pre-filter: {self.filter_label()} - click 'Process Image' to compute the mask")
+
+    # ------------------------------------------------------------------
+    # Pre-filtering (working image) and cached Otsu
+    # ------------------------------------------------------------------
+    def filter_label(self):
+        return "no filter" if self.filter_key == "None" else self.filter_key
+
+    def update_working_image(self):
+        # Decide which image is thresholded: original or Gaussian-filtered
+        if self.filter_var.get() == "Gaussian":
+            try:
+                sigma = float(self.sigma_var.get())
+            except tk.TclError:
+                self.status_var.set("Sigma must be a number.")
+                return
+            self.filter_key = f"Gaussian σ={sigma}"
+            self.working_array = gaussian_filter(self.image_array, sigma)
+            self.display_image(Image.fromarray(self.working_array), self.preview_canvases["Pre-filtered Image"])
+        else:
+            self.filter_key = "None"
+            self.working_array = self.image_array
+            canvas = self.preview_canvases["Pre-filtered Image"]
+            canvas.config(image="", text="No filter selected")
+            canvas.image = None
+
+        # Old results belong to the previous working image
+        self.otsu_t = None
+        self.sigma_b_squared = None
+        self.otsu_line.set_visible(False)
+        self.clear_mask()
+        self.set_method_plot_visible(False)
+
+        # Histogram of the image that is actually thresholded
+        self.status_var.set("Computing histogram...")
+        self.root.update_idletasks()
+        _, self.histogram_bins = calculate_image_histogram(self.working_array)
+        self.draw_histogram()
+
+    def get_otsu(self, key, image):
+        if key not in self.otsu_cache:
+            self.status_var.set("Computing Otsu threshold...")
+            self.root.update_idletasks()
+            self.otsu_cache[key] = otsu_threshold(image)
+        return self.otsu_cache[key]
+
+    def show_otsu_on_histogram(self):
+        self.otsu_t, self.sigma_b_squared = self.get_otsu(self.filter_key, self.working_array)
+        self.otsu_line.set_visible(True)
+        self.move_line(self.otsu_line, self.otsu_t)
 
     # ------------------------------------------------------------------
     # Processing
@@ -262,21 +351,26 @@ class ImageSegmentationGUI:
 
         if method == "Manual":
             t = self.threshold_var.get()
-            self.show_mask(apply_threshold(self.image_array, t))
+            self.move_line(self.manual_line, t)
+            self.show_mask(apply_threshold(self.working_array, t))
             if self.method_plot_visible:
                 self.set_method_plot_visible(False)
-            self.status_var.set(f"Manual threshold: t = {t}")
+            self.status_var.set(f"Manual threshold: t = {t} ({self.filter_label()})")
 
         elif method == "Otsu's Algorithm":
-            if self.otsu_t is None:
-                self.status_var.set("Computing Otsu threshold...")
-                self.root.update_idletasks()
-                self.otsu_t, self.sigma_b_squared = otsu_threshold(self.image_array)
-            self.otsu_line.set_visible(True)
-            self.move_line(self.otsu_line, self.otsu_t)
-            self.show_mask(apply_threshold(self.image_array, self.otsu_t))
+            self.show_otsu_on_histogram()
+            self.show_mask(apply_threshold(self.working_array, self.otsu_t))
             self.plot_sigma_b_squared()
-            self.status_var.set(f"Otsu threshold: t* = {self.otsu_t}")
+            self.status_var.set(f"Otsu threshold: t* = {self.otsu_t} ({self.filter_label()})")
+
+        elif method == COMPARE_METHOD:
+            # Both thresholds on the same histogram + masks side by side in the right pane
+            t = self.threshold_var.get()
+            self.move_line(self.manual_line, t)
+            self.show_otsu_on_histogram()
+            self.show_mask(apply_threshold(self.working_array, t))  # 'Save Mask' saves the manual one
+            self.plot_comparison(t)
+            self.status_var.set(f"Comparison: manual t = {t}, Otsu t* = {self.otsu_t} ({self.filter_label()})")
 
         elif method == "Adaptive":
             W = self.window_var.get()
@@ -286,7 +380,7 @@ class ImageSegmentationGUI:
                 return
             self.status_var.set(f"Applying adaptive thresholding (W={W}, C={C})...")
             self.root.update_idletasks()
-            mask, T = adaptive_threshold(self.image_array, W, C)
+            mask, T = adaptive_threshold(self.working_array, W, C)
             self.show_mask(mask)
             self.plot_threshold_map(T, W, C)
             self.status_var.set(f"Adaptive thresholding applied (W={W}, C={C}).")
@@ -317,18 +411,10 @@ class ImageSegmentationGUI:
         self.image_array = np.array(self.original_image)
 
         # New image -> forget results computed for the previous one
-        self.otsu_t = None
-        self.sigma_b_squared = None
-        self.otsu_line.set_visible(False)
-        self.clear_mask()
-        self.set_method_plot_visible(False)
+        self.otsu_cache = {}
 
         self.display_image(self.original_image, self.preview_canvases["Original Image"])
-
-        self.status_var.set("Computing histogram...")
-        self.root.update_idletasks()
-        _, self.histogram_bins = calculate_image_histogram(self.image_array)
-        self.draw_histogram()
+        self.update_working_image()  # applies the selected pre-filter + histogram
 
         self.status_var.set(f"Loaded: {file_path} - click 'Process Image' to compute the mask")
 
